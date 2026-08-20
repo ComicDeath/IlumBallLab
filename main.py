@@ -33,91 +33,363 @@ smurf_img = pygame.transform.scale(smurf_img, (WIDTH, HEIGHT))
 
 paused = False
 
+# ============================================================
+# EFFECTS
+# ============================================================
+
+class Effect:
+    def __init__(self, duration):
+        self.duration = duration
+
+    def start(self, ball):
+        pass
+
+    def update(self, ball, dt):
+        self.duration -= dt
+
+    def end(self, ball):
+        pass
+
+    def is_finished(self):
+        return self.duration <= 0
+
+
+class SpeedBoost(Effect):
+    def __init__(self, duration, multiplier):
+        super().__init__(duration)
+        self.multiplier = multiplier
+        self.original_multiplier = None
+
+    def start(self, ball):
+        self.original_multiplier = ball.speed_multiplier
+        ball.speed_multiplier *= self.multiplier
+
+    def end(self, ball):
+        ball.speed_multiplier /= self.multiplier
+
+class RotationBoost(Effect):
+    def __init__(self, duration, multiplier):
+        super().__init__(duration)
+        self.multiplier = multiplier
+        self.original_rotation = None
+
+    def start(self, ball):
+        self.original_rotation = ball.omega
+        ball.omega *= self.multiplier
+
+    def end(self, ball):
+        ball.omega /= self.multiplier
+
+
+class DamageBoost(Effect):
+    def __init__(self, duration, multiplier):
+        super().__init__(duration)
+        self.multiplier = multiplier
+        self.original_multiplier = None
+
+    def start(self, ball):
+        self.original_multiplier = ball.damage_multiplier
+        ball.damage_multiplier *= self.multiplier
+
+    def end(self, ball):
+        ball.damage_multiplier /= self.multiplier
+
+
+class Shield(Effect):
+    def __init__(self, duration):
+        super().__init__(duration)
+
+    def start(self, ball):
+        ball.invulnerable = True
+
+    def end(self, ball):
+        ball.invulnerable = False
+
+# ============================================================
+# ABILITIES
+# ============================================================
+
+class Ability:
+    def activate(self, ball):
+        pass
+
+
+class Heal(Ability):
+    def __init__(self, amount=20):
+        self.amount = amount
+
+    def activate(self, ball):
+        ball.hp = min(ball.max_hp, ball.hp + self.amount)
+        # Debug print
+        print(f"{ball.nome} curou {self.amount} HP")
+
+
+class SpeedAbility(Ability):
+    def __init__(self, duration=3, multiplier=1.5):
+        self.duration = duration
+        self.multiplier = multiplier
+
+    def activate(self, ball):
+        ball.add_effect(SpeedBoost(self.duration, self.multiplier))
+        ball.add_effect(RotationBoost(self.duration, self.multiplier))
+        # Debug print
+        print(f"{ball.nome} acelerou em {self.multiplier} vezes")
+
+
+class Berserk(Ability):
+    def __init__(self, duration=5, multiplier=2):
+        self.duration = duration
+        self.multiplier = multiplier
+
+    def activate(self, ball):
+        ball.add_effect(DamageBoost(self.duration, self.multiplier))
+        # Debug print
+        print(f"{ball.nome} aumentou o dano em {self.multiplier} vezes")
+
+
+class ShieldAbility(Ability):
+    def __init__(self, duration=3):
+        self.duration = duration
+
+    def activate(self, ball):
+        ball.add_effect(Shield(self.duration))
+        # Debug print
+        print(f"{ball.nome} está invulnerável")
+
+# ============================================================
+# WEAPONS
+# ============================================================
+
+class Weapon:
+    def __init__(self, image, length=40, thickness=3, damage=5, knockback=1, elasticity=1):
+        self.image = image
+        self.length = length
+        self.thickness = thickness
+        self.damage = damage
+        self.knockback = knockback
+        self.elasticity = elasticity
+
+    def create_shape(self, body, radius):
+        shape = pymunk.Segment(
+            body,
+            (radius, 0),
+            (radius + self.length, 0),
+            self.thickness
+        )
+
+        shape.elasticity = self.elasticity
+        shape.collision_type = 2
+        shape.sensor = True
+
+        return shape
+
+    def get_damage(self, attacker):
+        return self.damage * attacker.damage_multiplier
+
+    def get_knockback(self, attacker):
+        return self.knockback
+
+
+class Sword(Weapon):
+    def __init__(self, image):
+        super().__init__(
+            image=image,
+            length=40,
+            thickness=3,
+            damage=5,
+            knockback=1,
+            elasticity=1
+        )
+
+
+class Hammer(Weapon):
+    def __init__(self, image):
+        super().__init__(
+            image=image,
+            length=35,
+            thickness=6,
+            damage=15,
+            knockback=3,
+            elasticity=1
+        )
+
+
+class Spear(Weapon):
+    def __init__(self, image):
+        super().__init__(
+            image=image,
+            length=65,
+            thickness=2,
+            damage=8,
+            knockback=0.5,
+            elasticity=1
+        )
+
+# ============================================================
+# BALL
+# ============================================================
+
 class Ball:
-    def __init__(self, space, x, y, color, image, mass):
+    def __init__(self, nome, space, x, y, color, image, mass, weapon, abilities=None, vel_base = 250):
+
+        # Caracteristicas físicas
         self.radius = 15
         self.mass = mass
+        self.color = color
+        self.nome = nome
 
-        self.body = pymunk.Body(1, pymunk.moment_for_circle(self.mass, 0, self.radius))
+        # Status base
+        self.knockback = 1
+        self.vel_base = vel_base
+
+        self.max_hp = 100
+        self.hp = self.max_hp
+        self.hits = 0
+
+        self.speed_multiplier = 1
+        self.damage_multiplier = 1
+        self.invulnerable = False
+
+        # Armas e Habilidades
+        self.weapon = weapon
+        self.abilities = abilities if abilities is not None else []
+        self.effects = []
+
+        # Física
+        self.body = pymunk.Body(self.mass, pymunk.moment_for_circle(self.mass, 0, self.radius))
+
         self.body.position = x, y
-        vel_x_inicial = random.uniform(0, 10) * 15
-        vel_y_inicial = (150**2 - (vel_x_inicial**2))**0.5
-        self.body.velocity = random.choice([-1, 1]) * vel_x_inicial, random.choice([-1, 1]) * vel_y_inicial
+
+        random_velocity(self.body, 250)
 
         self.shape = pymunk.Circle(self.body, self.radius)
         self.shape.elasticity = 1
         self.shape.friction = 0
         self.shape.collision_type = 1
 
-        self.weapon_length = 40
-        self.weapon_shape = pymunk.Segment(
-            self.body,
-            (self.radius, 0),
-            (self.radius + self.weapon_length, 0),
-            3
-        )
-        self.weapon_shape.elasticity = 1
-        self.weapon_shape.collision_type = 2
-        self.weapon_shape.sensor = True
+        self.weapon_shape = self.weapon.create_shape(
+                    self.body,
+                    self.radius
+                )
+        
+        # self.weapon_length = 40
+        # self.weapon_shape = pymunk.Segment(
+        #     self.body,
+        #     (self.radius, 0),
+        #     (self.radius + self.weapon_length, 0),
+        #     3
+        # )
+        # self.weapon_shape.elasticity = 1
+        # self.weapon_shape.collision_type = 2
+        # self.weapon_shape.sensor = True
 
         space.add(self.body, self.shape, self.weapon_shape)
 
-        self.hp = 100
-        self.hits = 0
-        self.color = color
-
+        # Rotação
         self.angle = 0
         self.omega = random.uniform(3, 5)
 
-        self.original_image = pygame.transform.rotate(image, 180)
+        weapon_image = pygame.transform.scale(self.weapon.image, [self.weapon.length]*2)
+        self.original_image = pygame.transform.rotate(weapon_image, 180)
         self.image = image
 
         self.last_hit_time = 0
 
-        # PROVISÓRIO
+        # Debug Vectors
         self.i_args = False
         self.v_args = False
 
+    # --------------------------------------------------------
+    # Stats / combat
+    # --------------------------------------------------------
+
+    def damage(self):
+        return self.weapon.get_damage(self) + self.hits
+
+    def get_knockback(self):
+        return self.weapon.get_knockback(self)
+
+    def take_damage(self, amount):
+        if not self.invulnerable:
+            self.hp -= amount
+
+    # --------------------------------------------------------
+    # Abilities
+    # --------------------------------------------------------
+
+    def use_ability(self, index):
+        if 0 <= index < len(self.abilities):
+            self.abilities[index].activate(self)
+
+
+    # --------------------------------------------------------
+    # Effects
+    # --------------------------------------------------------
+
+    def add_effect(self, effect):
+        effect.start(self)
+        self.effects.append(effect)
+
+    def update_effects(self, dt):
+        finished = []
+
+        for effect in self.effects:
+            effect.update(self, dt)
+
+            if effect.is_finished():
+                effect.end(self)
+                finished.append(effect)
+
+        for effect in finished:
+            self.effects.remove(effect)
+
+    # --------------------------------------------------------
+    # Update
+    # --------------------------------------------------------
+
     def update(self):
-        self.angle += self.omega * (1/60)
+        self.angle += self.omega * dt
         self.body.angle = self.angle
+
+        self.update_effects(dt)
+
         v_min = 50
 
         def damping(velocidade):
-            if velocidade > 250:
-                return 1 - ((velocidade-250)**2)/4900000
+            if velocidade > self.vel_base * self.speed_multiplier:
+                return 1 - ((velocidade-self.vel_base * self.speed_multiplier)**2)/4900000
             else:
-                return 1 + ((velocidade-250)**2)/4900000
+                return 1 + ((velocidade-self.vel_base * self.speed_multiplier)**2)/4900000
 
         d = damping(self.body.velocity.length)
-        self.body.velocity = self.body.velocity.length * self.body.velocity.normalized() * d
+
+        if self.body.velocity.length > 0:
+            self.body.velocity = (self.body.velocity.normalized() * self.body.velocity.length * d)
 
         if self.body.velocity.length < v_min:
             if self.body.velocity.length > 0:
-                self.body.velocity = self.body.velocity.normalized() * v_min
+                self.body.velocity = (self.body.velocity.normalized() * v_min)
             else:
                 self.body.velocity = (v_min, 0)
 
-    def damage(self):
-        return 5 + self.hits
+    # --------------------------------------------------------
+    # Drawing
+    # --------------------------------------------------------
 
     def draw(self, screen):
         x, y = self.body.position
 
         pygame.draw.circle(screen, self.color, (int(x), int(y)), self.radius)
 
-        pos_x = x + math.cos(self.angle) * (self.radius + self.weapon_length/2)
-        pos_y = y + math.sin(self.angle) * (self.radius + self.weapon_length/2)
+        pos_x = x + math.cos(self.angle) * (self.radius + self.weapon.length/2)
+        pos_y = y + math.sin(self.angle) * (self.radius + self.weapon.length/2)
 
-        image = pygame.transform.rotate(
-            self.original_image,
-            90 - math.degrees(self.angle)
-        )
+        image = pygame.transform.rotate(self.original_image, 90 - math.degrees(self.angle))
 
         rect = image.get_rect(center=(pos_x, pos_y))
         screen.blit(image, rect.topleft)
 
-        # # PROVISÓRIO
+        # Debug Vector
         # if self.i_args:
         #     pygame.draw.line(*self.i_args)
 
@@ -127,10 +399,14 @@ class Ball:
         # v_args = [screen, (0, 255, 0), self.body.position, self.body.position+self.body.velocity, 3]
         # pygame.draw.line(*v_args)
 
-        # #PROVISÓRIO
+        # Debug Hurtbox
         # a = self.weapon_shape.a.rotated(self.body.angle) + self.body.position
         # b = self.weapon_shape.b.rotated(self.body.angle) + self.body.position
         # pygame.draw.line(screen, (255, 0, 0), a, b)
+
+# ============================================================
+# ARENA
+# ============================================================
 
 
 def create_walls(space):
@@ -151,65 +427,66 @@ def draw_walls(screen, walls):
     for w in walls:
         pygame.draw.line(screen, (255,255,255), w.a, w.b, int(w.radius*2))
 
+# ============================================================
+# COMBAT
+# ============================================================
+
+def calcular_impulso(arbiter, atacante, alvo, knockback):
+    c1 = alvo.body.position
+    c2 = atacante.body.position
+
+    r_module = alvo.radius
+
+    contato = next(iter(arbiter.contact_point_set.points))
+    ponto = contato.point_b
+
+    r_vector = (c1[0]-ponto.x, c1[1]-ponto.y)
+    d_vector = (ponto.x-c2[0], ponto.y-c2[1])
+
+    r_norm = (r_vector[0]/r_module, r_vector[1]/r_module)
+    d_module = (d_vector[0]**2 + d_vector[1]**2)**0.5
+
+    omega = atacante.omega
+
+    i_vector = (abs(d_module*knockback*omega)*r_norm[0], 
+                abs(d_module*knockback*omega)*r_norm[1])
+
+    inicio = ponto
+    fim = (ponto.x + i_vector[0], ponto.y + i_vector[1])
+
+    i_args = [screen, (255, 0, 0), inicio, fim, 3]
+
+    return i_vector, i_args
+
+def calcular_reflexao(arbiter, atacante, alvo):
+    contato = next(iter(arbiter.contact_point_set.points))
+    ponto = contato.point_b
+
+    r = ponto - atacante.body.position
+
+    normal = (alvo.body.position - ponto).normalized()
+
+    v_espada = pymunk.Vec2d(
+        -r.y,
+        r.x
+    ) * atacante.omega
+
+    v_rel = alvo.body.velocity - 0.5*v_espada
+
+    v_normal = v_rel.dot(normal)
+
+    v_rel = v_rel - 2 * v_normal * normal
+
+    v_refletida = (v_rel + v_espada)
+
+    inicio = ponto
+    fim = (ponto.x + v_refletida[0], ponto.y + v_refletida[1]    )
+
+    v_args = [screen, (0, 0, 255), inicio, fim, 3]
+
+    return v_refletida, v_args
+
 def setup_collision(space, azul, verde):
-    def calcular_impulso(arbiter, atacante, alvo, knockback):
-        c1 = alvo.body.position
-        c2 = atacante.body.position
-        r_module = alvo.radius
-        contato = next(iter(arbiter.contact_point_set.points))
-        ponto = contato.point_b
-        r_vector = (c1[0]-ponto.x, c1[1]-ponto.y)
-        d_vector = (ponto.x-c2[0], ponto.y-c2[1])
-
-        r_norm = (r_vector[0]/r_module, r_vector[1]/r_module)
-        d_module = (d_vector[0]**2 + d_vector[1]**2)**0.5
-        omega = atacante.omega
-        i_vector = (abs(d_module*knockback*omega)*r_norm[0], 
-                    abs(d_module*knockback*omega)*r_norm[1])
-
-        inicio = ponto
-        fim = (ponto.x + i_vector[0], ponto.y + i_vector[1])
-
-        i_args = [screen, (255, 0, 0), inicio, fim, 3]
-
-        return i_vector, i_args
-
-    def calcular_reflexao(arbiter, atacante, alvo):
-        contato = next(iter(arbiter.contact_point_set.points))
-        ponto = contato.point_b
-
-        # Vetor do centro do atacante até o ponto de contato
-        r = ponto - atacante.body.position
-
-        # Normal da superfície da espada, apontando para dentro do alvo
-        normal = (alvo.body.position - ponto).normalized()
-
-        # Velocidade da espada no ponto de contato
-        v_espada = pymunk.Vec2d(
-            -r.y,
-            r.x
-        ) * atacante.omega
-
-        # Velocidade da bola no referencial da espada
-        v_rel = alvo.body.velocity - 0.5*v_espada
-
-        # Componente normal da velocidade relativa
-        v_normal = v_rel.dot(normal)
-
-        v_rel = v_rel - 2 * v_normal * normal
-
-        # Voltamos para o referencial do mundo
-        v_refletida = (v_rel + v_espada)
-
-        inicio = ponto
-        fim = (
-            ponto.x + v_refletida[0],
-            ponto.y + v_refletida[1]
-        )
-
-        v_args = [screen, (0, 0, 255), inicio, fim, 3]
-
-        return v_refletida, v_args
 
     def collide(arbiter, space, data):
         global paused
@@ -217,66 +494,95 @@ def setup_collision(space, azul, verde):
         s1, s2 = arbiter.shapes
         now = time.time()
 
-        # azul acerta verde
-        if (s1 == azul.weapon_shape and s2 == verde.shape) or \
-           (s2 == azul.weapon_shape and s1 == verde.shape):
+        attacker = None
+        target = None
+        weapon1 = None
+        weapon2 = None
 
-            if now - azul.last_hit_time > 0.1:
-                verde.hp -= azul.damage()
-                azul.hits += 1
-                azul.last_hit_time = now
+        # Define quem atacou e quem apanhou
+        for ball in balls:
+            if s1 == ball.weapon_shape:
+                attacker = ball
+                weapon1 = ball
+            if s2 == ball.weapon_shape:
+                attacker = ball
+                weapon2 = ball
 
-                # impulso, verde.i_args = calcular_impulso(arbiter, azul, verde, 0.5)
-                reflexao, verde.v_args = calcular_reflexao(arbiter, azul, verde)
-                verde.body.velocity = reflexao
+            if s1 == ball.shape:
+                target = ball
+            elif s2 == ball.shape:
+                target = ball
 
-                azul.omega = -azul.omega
-                hit_sound.play()
+        # Espada ataca bola
+        if attacker is not None and target is not None:
+            if attacker is target:
+                return True
 
-                # verde.body.apply_impulse_at_local_point(impulso)
+            if now - attacker.last_hit_time <= 0.1:
+                return True
 
-                # paused = True
+            attacker.last_hit_time = now
 
-        # verde acerta azul
-        elif (s1 == verde.weapon_shape and s2 == azul.shape) or \
-             (s2 == verde.weapon_shape and s1 == azul.shape):
+            # Damage
+            target.take_damage(attacker.damage())
+            attacker.hits += 1
 
-            if now - verde.last_hit_time > 0.1:
-                azul.hp -= verde.damage()
-                verde.hits += 1
-                verde.last_hit_time = now
+            # Impulse
+            impulse, target.i_args = calcular_impulso(arbiter, attacker, target, attacker.get_knockback())
 
-                impulso, azul.i_args = calcular_impulso(arbiter, verde, azul, 1)
-                reflexao, azul.v_args = calcular_reflexao(arbiter, verde, azul)
-                azul.body.velocity = reflexao
+            # Reflection
+            reflection, target.v_args = calcular_reflexao(arbiter, attacker, target)
 
-                verde.omega = -verde.omega
-                hit_sound.play()
+            target.body.velocity = reflection
 
-                azul.body.apply_impulse_at_local_point(impulso)
+            # Weapon reaction
+            attacker.omega = -attacker.omega
 
-                # paused = True
+            hit_sound.play()
+
+            target.body.apply_impulse_at_local_point(impulse)
+
+            # Debug pause
+            # paused = True
+
+            return True
 
         # Briga de espadas (🏳️‍🌈?)
-        elif (s1 == azul.weapon_shape and s2 == verde.weapon_shape) or \
-             (s1 == verde.weapon_shape and s2 == azul.weapon_shape):
+        if weapon1 is not None and weapon2 is not None:
+            if now - weapon1.last_hit_time <= 0.1:
+                return True
 
-            if now - verde.last_hit_time > 0.1:
-                azul.omega = -azul.omega
-                verde.omega = -verde.omega
-                hit_sound.play()
+            if now - weapon2.last_hit_time <= 0.1:
+                return True
+
+            weapon1.last_hit_time = now
+            weapon2.last_hit_time = now
+
+            weapon1.omega = -weapon1.omega
+            weapon2.omega = -weapon2.omega
+
+            hit_sound.play()
+
+            return True
+
+        return True
+
 
     space.on_collision(2, 1, begin=collide)
     space.on_collision(2, 2, begin=collide)
 
 
-def random_velocity(body):
-    angle = random.uniform(0, 2*math.pi)
-    speed = 250
-    body.velocity = (math.cos(angle)*speed, math.sin(angle)*speed)
+# ============================================================
+# GAME
+# ============================================================
 
-def draw_hud(azul, verde):
+def random_velocity(body, base_speed = 250):
+    angle = random.uniform(0, 2*math.pi)
+    body.velocity = (math.cos(angle)*base_speed, math.sin(angle)*base_speed)
+
+def draw_hud(balls):
     x = ARENA_W + 10
+
     elapsed_time = time.time() - game_start_time
 
     minutes = int(elapsed_time // 60)
@@ -289,15 +595,21 @@ def draw_hud(azul, verde):
     )
 
     screen.blit(timer_text, (x, 50))
-    screen.blit(font.render(f"Azul HP: {azul.hp}", True, (255,255,255)), (x, 100))
-    screen.blit(font.render(f"Verde HP: {verde.hp}", True, (255,255,255)), (x, 150))
-    vel_azul = sum(v ** 2 for v in azul.body.velocity)**0.5
-    vel_verde = sum(v ** 2 for v in verde.body.velocity)**0.5
-    screen.blit(font.render(f"Azul VEL: {vel_azul:.2f}", True, (255,255,255)), (x, 200))
-    screen.blit(font.render(f"Verde VEL: {vel_verde:.2f}", True, (255,255,255)), (x, 250))
+
+    for i, ball in enumerate(balls):
+        y = 100 + i * 100
+
+        screen.blit(font.render(f"Bola {ball.nome} HP: {ball.hp:.0f}", True, (255, 255, 255)), (x, y))
+
+        velocity = ball.body.velocity.length
+
+        screen.blit(font.render(f"Bola {ball.nome} VEL: {velocity:.2f}", True, (255, 255, 255)), (x, y + 40))
+
 
 
 def new_game():
+    global game_start_time
+
     space = pymunk.Space()
     space.gravity = (0,0)
     space.damping = 1
@@ -305,17 +617,60 @@ def new_game():
 
     walls = create_walls(space)
 
-    azul = Ball(space, 120, 150, (0,0,255), weapon_img, 1)
-    verde = Ball(space, 280, 150, (0,255,0), weapon_img, 1)
+    # --------------------------------------------------------
+    # Weapons
+    # --------------------------------------------------------
+
+    sword = Sword(weapon_img)
+    sword2 = Sword(weapon_img)
+
+    # Example:
+    # hammer = Hammer(weapon_img)
+    # spear = Spear(weapon_img)
+
+    # --------------------------------------------------------
+    # Abilities
+    # --------------------------------------------------------
+
+    azul_abilities = [
+        Heal(20),
+        SpeedAbility(3, 1.5)
+    ]
+
+    verde_abilities = [
+        Berserk(5, 2),
+        ShieldAbility(3)
+    ]
+
+    # --------------------------------------------------------
+    # Balls
+    # --------------------------------------------------------
+
+    azul = Ball("Azul", space, 120, 150, (0, 0, 255), weapon_img, 1, sword, azul_abilities)
+
+    verde = Ball("Verde", space, 280, 150, (0, 255, 0), weapon_img, 1, sword2, verde_abilities)
+
+    balls = [
+        azul,
+        verde
+    ]
+
+    # def damage(self):
+    #     return 15 - self.hits
+
+    # verde.damage = damage.__get__(verde)
 
     setup_collision(space, azul, verde)
 
     game_start_time = time.time()
 
-    return space, walls, azul, verde, game_start_time
+    return space, walls, balls, game_start_time
 
 
-space, walls, azul, verde, game_start_time = new_game()
+space, walls, balls, game_start_time = new_game()
+
+azul = balls[0]
+verde = balls[1]
 
 state = "menu"
 start_button = pygame.Rect(450, 150, 180, 60)
@@ -341,6 +696,19 @@ while running:
             if event.key == pygame.K_p:
                 paused = True
 
+            # Test abilities
+            if event.key == pygame.K_1:
+                azul.use_ability(0)
+
+            if event.key == pygame.K_2:
+                azul.use_ability(1)
+
+            if event.key == pygame.K_3:
+                verde.use_ability(0)
+
+            if event.key == pygame.K_4:
+                verde.use_ability(1)
+
     screen.fill((30,30,30))
 
     if state == "menu":
@@ -364,9 +732,11 @@ while running:
             space.step(dt)
 
         draw_walls(screen, walls)
-        azul.draw(screen)
-        verde.draw(screen)
-        draw_hud(azul, verde)
+
+        for ball in balls:
+            ball.draw(screen)
+
+        draw_hud(balls)
 
         if paused:
             pause_text = font.render("PAUSADO - ESPAÇO PARA CONTINUAR", True, (255,255,255))
